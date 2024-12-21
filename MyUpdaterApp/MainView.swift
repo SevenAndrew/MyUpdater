@@ -33,12 +33,20 @@ struct MainView: View {
     private let controller = UpdateController()
     private let logger = LogManager.shared
     @State private var prerequisites: (success: Bool, errors: [String]) = (true, [])
+    @State private var currentLogMessage: String = ""
+
+    private func setupLogObserver() {
+        LogManager.shared.onNewLogEntry = { logEntry in
+            self.currentLogMessage = logEntry
+            self.refreshLogs()
+        }
+    }
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             HStack {
                 Text("Update Manager")
-                    .font(.largeTitle)
+                    .font(.title)
                     .bold()
                 
                 Spacer()
@@ -48,89 +56,104 @@ struct MainView: View {
                 }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title2)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.red)
                 }
                 .buttonStyle(PlainButtonStyle())
                 .help("Beenden")
             }
-            .padding(.bottom, 10)
+            .padding(.bottom, 4)
 
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 ProgressView(value: progress, total: 1.0)
-                    .progressViewStyle(LinearProgressViewStyle(tint: Color.blue))
+                    .progressViewStyle(LinearProgressViewStyle(tint: .blue))
                     .animation(.easeInOut, value: progress)
-
-                Text("\(Int(progress * 100))% abgeschlossen")
-                    .font(.headline)
-                    .foregroundColor(.gray)
-
-                Text(currentStep)
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
-            }
-            .padding(.horizontal)
-
-            if !prerequisites.success {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Fehlende Voraussetzungen:")
+                
+                HStack {
+                    Text("\(Int(progress * 100))%")
                         .font(.headline)
-                        .foregroundColor(.red)
+                        .foregroundColor(.gray)
                     
-                    ForEach(prerequisites.errors, id: \.self) { error in
-                        Text(error)
-                            .foregroundColor(.red)
-                    }
+                    Spacer()
+                    
+                    Text(currentStep)
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
                 }
-                .padding()
-                .background(Color(white: 0.95))
+            }
+            
+            if !prerequisites.success {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Fehlende Voraussetzungen:")
+                            .font(.subheadline.bold())
+                            .foregroundColor(.red)
+                        
+                        ForEach(prerequisites.errors, id: \.self) { error in
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 100)
+                .padding(8)
+                .background(Color(.windowBackgroundColor).opacity(0.5))
                 .cornerRadius(8)
-                .padding(.horizontal)
             }
 
-            Button(action: startUpdates) {
-                Text("Updates starten")
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(isUpdating ? Color.gray : Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-            }
-            .disabled(isUpdating || !prerequisites.success)
-            .padding(.horizontal)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Logs:")
-                    .font(.headline)
-                    .padding(.horizontal)
-
+            VStack(spacing: 8) {
+                if !currentLogMessage.isEmpty {
+                    Text(currentLogMessage)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(.green)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color.black.opacity(0.8))
+                        .cornerRadius(8)
+                }
+                
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(logMessages) { log in
+                        ForEach(logMessages.reversed()) { log in
                             Text(log.message)
-                                .font(.system(.body, design: .monospaced))
+                                .font(.system(.caption, design: .monospaced))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .foregroundColor(.white)
                         }
                     }
-                    .padding()
+                    .padding(8)
                 }
-                .background(Color(white: 0.2))
+                .background(Color(white: 0.15))
                 .cornerRadius(8)
             }
             .frame(maxHeight: .infinity)
 
-            Button(action: openLogFile) {
-                Text("Log-Datei öffnen")
-                    .padding()
+            HStack(spacing: 12) {
+                Button(action: startUpdates) {
+                    HStack {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                        Text("Updates starten")
+                    }
                     .frame(maxWidth: .infinity)
-                    .background(Color.green)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isUpdating || !prerequisites.success)
+                
+                Button(action: openLogFile) {
+                    HStack {
+                        Image(systemName: "doc.text.fill")
+                        Text("Log öffnen")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.bordered)
             }
-            .padding(.horizontal)
         }
         .padding()
-        .frame(minWidth: 600, minHeight: 400, maxHeight: .infinity)
+        .frame(minWidth: 500, minHeight: 400)
         .alert(isPresented: $showUpdateAlert) {
             Alert(title: Text("Update abgeschlossen"),
                   message: Text(updateMessage),
@@ -138,6 +161,8 @@ struct MainView: View {
         }
         .onAppear {
             checkPrerequisites()
+            setupLogObserver()
+            refreshLogs()
         }
     }
 
@@ -178,10 +203,14 @@ struct MainView: View {
     private func refreshLogs() {
         Task { @MainActor in
             if let logContent = try? String(contentsOfFile: logger.getLogFilePath(), encoding: .utf8) {
-                logMessages = logContent
-                    .components(separatedBy: "\n")
+                let logs = logContent.components(separatedBy: "\n")
                     .filter { !$0.isEmpty }
                     .map { LogEntry(message: $0, timestamp: Date()) }
+                
+                logMessages = logs
+                if let lastLog = logs.first {
+                    currentLogMessage = lastLog.message
+                }
             }
         }
     }
